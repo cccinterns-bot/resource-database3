@@ -4,10 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Resource Database</title>
-    <!-- Firebase SDK -->
-    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database.js"></script>
-    
+    <!-- Google Sign-In -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <style>
         :root {
             --primary: #2563eb;
@@ -87,9 +85,18 @@
 <body>
 
 <div class="container">
+    <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <h1 style="margin: 0; color: #2563eb;">Resource Database</h1>
+            <p id="userStatus" style="font-size: 12px; color: #666; margin: 5px 0;">Loading...</p>
+        </div>
+        <div id="googleSignInButton"></div>
+    </div>
+
     <nav>
         <button onclick="switchView('search')">Resource Searcher</button>
         <button onclick="switchView('input')">Resource Input</button>
+        <button style="background-color: #6b7280;" onclick="logout()">Logout</button>
     </nav>
 
     <div id="search-view" class="view-section active">
@@ -137,74 +144,154 @@
                 </div>
             
             <button onclick="addResource()">Save Resource</button>
+            <button style="background-color: #6b7280; margin-left: 10px;" onclick="cancelEdit()">Cancel</button>
         </div>
     </div>
 </div>
 
 <script>
-    // === FIREBASE CONFIGURATION ===
-    const firebaseConfig = {
-        apiKey: "AIzaSyD31MBuU7ptWy-FBM68bPdSwJMDLhswzCQ",
-        authDomain: "resource-database-csp.firebaseapp.com",
-        databaseURL: "https://resource-database-csp-default-rtdb.firebaseio.com",
-        projectId: "resource-database-csp",
-        storageBucket: "resource-database-csp.appspot.com",
-        messagingSenderId: "994349931235",
-        appId: "1:994349931235:web:784007c56807dfcb1d83d6"
-    };
-
-    // Initialize Firebase
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
-
-    // State management using Firebase
+    // ============================================
+    // GOOGLE SHEETS + APPS SCRIPT INTEGRATION
+    // ============================================
+    // TODO: Replace with your actual Google Apps Script URL after deploying
+    const APPS_SCRIPT_URL = 'https://script.google.com/a/macros/communitycaringclinic.com/s/AKfycbx7UqvfVofg2JslX-cUB-BykmKDgnh8uVXhpUxTkXSylDYC4s7BN4cvNMPyxShh8vZa1w/exec';
+    
     let data = {
         categories: {},
         resources: []
     };
+    let editingIndex = null;
+    let currentUser = null;
+    let accessToken = null;
 
-    // --- Firebase Data Management ---
-    async function loadData() {
-        try {
-            const snapshot = await db.ref('resourceDB').get();
-            if (snapshot.exists()) {
-                data = snapshot.val();
-            } else {
-                data = { categories: {}, resources: [] };
+    // --- Google Sign-In Setup ---
+    function initializeGoogleSignIn() {
+        google.accounts.id.initialize({
+            client_id: '575943589676-6h2k1gqga50e23d1d5r5lnj21s4g0c1o.apps.googleusercontent.com',
+            callback: handleCredentialResponse
+        });
+        
+        google.accounts.id.renderButton(
+            document.getElementById('googleSignInButton'),
+            {
+                theme: 'outline',
+                size: 'large'
             }
+        );
+
+        // Check if user already signed in
+        google.accounts.id.prompt();
+    }
+
+    function handleCredentialResponse(response) {
+        // Get user info from JWT
+        const base64Url = response.credential.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => {
+            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join(''));
+        
+        currentUser = JSON.parse(jsonPayload);
+        accessToken = response.credential;
+        
+        updateUserStatus();
+        loadData(); // Load data from Google Sheet
+        hideGoogleSignIn();
+    }
+
+    function hideGoogleSignIn() {
+        document.getElementById('googleSignInButton').style.display = 'none';
+    }
+
+    function showGoogleSignIn() {
+        document.getElementById('googleSignInButton').style.display = 'block';
+    }
+
+    function logout() {
+        google.accounts.id.disableAutoSelect();
+        currentUser = null;
+        accessToken = null;
+        data = { categories: {}, resources: [] };
+        
+        document.getElementById('search-view').innerHTML = '';
+        document.getElementById('input-view').innerHTML = '';
+        document.getElementById('userStatus').textContent = 'Not signed in';
+        
+        showGoogleSignIn();
+    }
+
+    function updateUserStatus() {
+        if (currentUser) {
+            document.getElementById('userStatus').textContent = `Signed in as: ${currentUser.email}`;
+        }
+    }
+
+    // --- Data Management (Google Sheets via Apps Script) ---
+    async function callAppsScript(action, payload = {}) {
+        if (!currentUser) {
+            alert('Please sign in first');
+            return null;
+        }
+
+        try {
+            const response = await fetch(APPS_SCRIPT_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    action: action,
+                    data: payload,
+                    token: accessToken
+                })
+            });
+
+            const result = await response.json();
+            if (result.error) {
+                alert('Error: ' + result.error);
+                return null;
+            }
+            return result;
+        } catch (error) {
+            console.error('Error calling Apps Script:', error);
+            alert('Network error: ' + error.message);
+            return null;
+        }
+    }
+
+    async function loadData() {
+        const result = await callAppsScript('getData');
+        if (result) {
+            data = result;
             updateCategorySelect();
             updateTagCheckboxes();
             updateSearchFilters();
             performSearch();
-        } catch (error) {
-            console.error('Error loading data:', error);
         }
     }
 
     async function saveData() {
-        try {
-            await db.ref('resourceDB').set(data);
-        } catch (error) {
-            console.error('Error saving data:', error);
-        }
+        // Data is auto-saved via API calls (addResource, updateResource, deleteResource)
+        // This function is kept for compatibility
     }
 
     // --- Initialization & View Management ---
     function init() {
-        loadData();
-        // Real-time listener for changes from other users
-        db.ref('resourceDB').on('value', snapshot => {
-            if (snapshot.exists()) {
-                data = snapshot.val();
-                updateCategorySelect();
-                updateTagCheckboxes();
-                updateSearchFilters();
-                performSearch();
-            }
-        });
+        // Wait for Google Sign-In library to load
+        if (typeof google === 'undefined') {
+            console.log('Waiting for Google Sign-In library...');
+            setTimeout(init, 100);
+            return;
+        }
+        initializeGoogleSignIn();
+        updateUserStatus();
     }
 
     function switchView(view) {
+        if (!currentUser) {
+            alert('Please sign in first');
+            return;
+        }
         document.getElementById('search-view').classList.remove('active');
         document.getElementById('input-view').classList.remove('active');
         document.getElementById(view + '-view').classList.add('active');
@@ -229,12 +316,14 @@
             return;
         }
 
-        data.categories[catName] = [];
-        await saveData();
-        updateCategorySelect();
-        updateTagCheckboxes();
-        catInput.value = '';
-        alert(`Category "${catName}" added!`);
+        const result = await callAppsScript('addCategory', { name: catName });
+        if (result) {
+            data.categories[catName] = [];
+            updateCategorySelect();
+            updateTagCheckboxes();
+            catInput.value = '';
+            alert(`Category "${catName}" added!`);
+        }
     }
 
     async function addTag() {
@@ -253,11 +342,13 @@
             return;
         }
 
-        data.categories[category].push(tagName);
-        await saveData();
-        updateTagCheckboxes();
-        tagInput.value = '';
-        alert(`Tag "${tagName}" added to ${category}!`);
+        const result = await callAppsScript('addTag', { category, tag: tagName });
+        if (result) {
+            data.categories[category].push(tagName);
+            updateTagCheckboxes();
+            tagInput.value = '';
+            alert(`Tag "${tagName}" added to ${category}!`);
+        }
     }
 
     // Update the dropdown used when creating tags
@@ -293,21 +384,92 @@
         const desc = document.getElementById('resDesc').value.trim();
         const content = document.getElementById('resContent').value.trim();
         
-        // Gather selected tags
         const selectedTags = Array.from(document.querySelectorAll('.res-tag-checkbox:checked')).map(cb => cb.value);
 
-        if (!title) { alert("Title is required!"); return; }
+        if (!title) { 
+            alert("Title is required!"); 
+            return; 
+        }
 
-        data.resources.push({ title, desc, content, tags: selectedTags });
-        await saveData();
+        const resourceData = { title, desc, content, tags: selectedTags };
 
-        // Clear form
+        let result;
+        if (editingIndex !== null) {
+            result = await callAppsScript('updateResource', {
+                index: editingIndex,
+                data: resourceData
+            });
+            if (result) {
+                data.resources[editingIndex] = resourceData;
+            }
+        } else {
+            result = await callAppsScript('addResource', { data: resourceData });
+            if (result) {
+                data.resources.push(resourceData);
+            }
+        }
+
+        if (result) {
+            editingIndex = null;
+            
+            document.getElementById('resTitle').value = '';
+            document.getElementById('resDesc').value = '';
+            document.getElementById('resContent').value = '';
+            document.querySelectorAll('.res-tag-checkbox').forEach(cb => cb.checked = false);
+            updateSaveButtonText();
+
+            alert("Resource saved successfully!");
+            switchView('search');
+            performSearch();
+        }
+    }
+
+    function editResource(index) {
+        if (index < 0 || index >= data.resources.length) { return; }
+
+        const res = data.resources[index];
+        
+        document.getElementById('resTitle').value = res.title;
+        document.getElementById('resDesc').value = res.desc;
+        document.getElementById('resContent').value = res.content;
+        
+        document.querySelectorAll('.res-tag-checkbox').forEach(cb => {
+            cb.checked = res.tags.includes(cb.value);
+        });
+        
+        editingIndex = index;
+        updateSaveButtonText();
+        switchView('input');
+        window.scrollTo(0, 0);
+    }
+
+    function updateSaveButtonText() {
+        const button = document.querySelector('button[onclick="addResource()"]');
+        if (button) {
+            button.textContent = editingIndex !== null ? 'Update Resource' : 'Save Resource';
+        }
+    }
+
+    function cancelEdit() {
+        editingIndex = null;
         document.getElementById('resTitle').value = '';
         document.getElementById('resDesc').value = '';
         document.getElementById('resContent').value = '';
         document.querySelectorAll('.res-tag-checkbox').forEach(cb => cb.checked = false);
+        updateSaveButtonText();
+        switchView('search');
+    }
 
-        alert("Resource saved successfully!");
+    async function deleteResource(index) {
+        if (index < 0 || index >= data.resources.length) { return; }
+
+        if (!confirm('Delete this resource?')) { return; }
+
+        const result = await callAppsScript('deleteResource', { index });
+        if (result) {
+            data.resources.splice(index, 1);
+            performSearch();
+        }
     }
 
     // --- Search Interface ---
@@ -340,31 +502,36 @@
         const resultsContainer = document.getElementById('searchResults');
         resultsContainer.innerHTML = '';
 
-        const results = data.resources.filter(res => {
-            // 1. Text Search (Matches Title, Desc, or Content)
-            const textMatch = res.title.toLowerCase().includes(keyword) || 
-                              res.desc.toLowerCase().includes(keyword) || 
-                              res.content.toLowerCase().includes(keyword);
+        const results = data.resources
+            .map((res, index) => ({ res, index }))
+            .filter(item => {
+                const res = item.res;
+                const textMatch = res.title.toLowerCase().includes(keyword) ||
+                                  res.desc.toLowerCase().includes(keyword) ||
+                                  res.content.toLowerCase().includes(keyword);
 
-            // 2. Tag Filters (Resource must have ALL selected filter tags)
-            const tagMatch = filters.every(filterTag => res.tags.includes(filterTag));
+                const tagMatch = filters.every(filterTag => res.tags.includes(filterTag));
 
-            return textMatch && tagMatch;
-        });
+                return textMatch && tagMatch;
+            });
 
         if (results.length === 0) {
             resultsContainer.innerHTML = '<p style="color: gray;">No resources found.</p>';
             return;
         }
 
-        results.forEach(res => {
+        results.forEach(item => {
+            const res = item.res;
             const tagsHtml = res.tags.map(t => `<span class="tag-label">${t}</span>`).join('');
+
             resultsContainer.innerHTML += `
                 <div class="card">
                     <h3>${res.title}</h3>
                     <p><strong>Description:</strong> ${res.desc}</p>
                     <p>${res.content}</p>
                     <div style="margin-top: 10px;">${tagsHtml}</div>
+                    <button style="margin-top: 12px; background: #2563eb; margin-right: 10px;" onclick="editResource(${item.index})">Edit</button>
+                    <button style="margin-top: 12px; background: #dc2626;" onclick="deleteResource(${item.index})">Delete</button>
                 </div>
             `;
         });
