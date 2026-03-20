@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resource Database</title>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database.js"></script>
+    
+    <style>
+        :root {
+            --primary: #2563eb;
+            --bg: #f8fafc;
+            --surface: #ffffff;
+            --text: #1e293b;
+            --border: #e2e8f0;
+        }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        nav {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover { background-color: #1d4ed8; }
+        .view-section {
+            background: var(--surface);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            display: none;
+        }
+        .view-section.active { display: block; }
+        .card {
+            border: 1px solid var(--border);
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+        }
+        input[type="text"], select, textarea {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0 15px 0;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .tag-group { margin-bottom: 10px; }
+        .tag-label {
+            display: inline-block;
+            background: #e2e8f0;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin: 2px;
+        }
+        .filter-container {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+        .filter-item { flex: 1; min-width: 150px; }
+        h2, h3 { margin-top: 0; }
+        hr { border: 0; border-top: 1px solid var(--border); margin: 20px 0; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <nav>
+        <button onclick="switchView('search')">Resource Searcher</button>
+        <button onclick="switchView('input')">Resource Input</button>
+    </nav>
+
+    <div id="search-view" class="view-section active">
+        <h2>Search Resources</h2>
+        <input type="text" id="searchInput" placeholder="Search by title, description, or content..." onkeyup="performSearch()">
+        
+        <div id="searchFilters" class="filter-container">
+            </div>
+        
+        <div id="searchResults">
+            </div>
+    </div>
+
+    <div id="input-view" class="view-section">
+        <h2>Add Resource Data</h2>
+
+        <div class="card">
+            <h3>1. Tag Categorizer</h3>
+            <div style="display: flex; gap: 10px;">
+                <input type="text" id="newCategory" placeholder="New Category Name (e.g., Subject, Format)">
+                <button onclick="addCategory()" style="white-space: nowrap;">Add Category</button>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+                <select id="categorySelect">
+                    </select>
+                <input type="text" id="newTag" placeholder="New Tag Name (e.g., Math, Video)">
+                <button onclick="addTag()" style="white-space: nowrap;">Add Tag</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>2. Add New Resource</h3>
+            <label>Title</label>
+            <input type="text" id="resTitle" placeholder="Resource Title">
+            
+            <label>Short Description</label>
+            <input type="text" id="resDesc" placeholder="Brief summary">
+            
+            <label>Content</label>
+            <textarea id="resContent" rows="4" placeholder="Full resource content or link..."></textarea>
+            
+            <label>Assign Tags</label>
+            <div id="tagCheckboxes" style="margin: 10px 0;">
+                </div>
+            
+            <button onclick="addResource()">Save Resource</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // === FIREBASE CONFIGURATION ===
+    const firebaseConfig = {
+        apiKey: "AIzaSyD31MBuU7ptWy-FBM68bPdSwJMDLhswzCQ",
+        authDomain: "resource-database-csp.firebaseapp.com",
+        databaseURL: "https://resource-database-csp-default-rtdb.firebaseio.com",
+        projectId: "resource-database-csp",
+        storageBucket: "resource-database-csp.appspot.com",
+        messagingSenderId: "994349931235",
+        appId: "1:994349931235:web:784007c56807dfcb1d83d6"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // State management using Firebase
+    let data = {
+        categories: {},
+        resources: []
+    };
+
+    // --- Firebase Data Management ---
+    async function loadData() {
+        try {
+            const snapshot = await db.ref('resourceDB').get();
+            if (snapshot.exists()) {
+                data = snapshot.val();
+            } else {
+                data = { categories: {}, resources: [] };
+            }
+            updateCategorySelect();
+            updateTagCheckboxes();
+            updateSearchFilters();
+            performSearch();
+        } catch (error) {
+            console.error('Error loading data:', error);
+        }
+    }
+
+    async function saveData() {
+        try {
+            await db.ref('resourceDB').set(data);
+        } catch (error) {
+            console.error('Error saving data:', error);
+        }
+    }
+
+    // --- Initialization & View Management ---
+    function init() {
+        loadData();
+        // Real-time listener for changes from other users
+        db.ref('resourceDB').on('value', snapshot => {
+            if (snapshot.exists()) {
+                data = snapshot.val();
+                updateCategorySelect();
+                updateTagCheckboxes();
+                updateSearchFilters();
+                performSearch();
+            }
+        });
+    }
+
+    function switchView(view) {
+        document.getElementById('search-view').classList.remove('active');
+        document.getElementById('input-view').classList.remove('active');
+        document.getElementById(view + '-view').classList.add('active');
+        if (view === 'search') {
+            updateSearchFilters();
+            performSearch();
+        }
+    }
+
+    // --- Tag & Category Management ---
+    async function addCategory() {
+        const catInput = document.getElementById('newCategory');
+        const catName = catInput.value.trim();
+        
+        if (!catName) {
+            alert('Category name is required!');
+            return;
+        }
+        
+        if (data.categories[catName]) {
+            alert('Category already exists!');
+            return;
+        }
+
+        data.categories[catName] = [];
+        await saveData();
+        updateCategorySelect();
+        updateTagCheckboxes();
+        catInput.value = '';
+        alert(`Category "${catName}" added!`);
+    }
+
+    async function addTag() {
+        const catSelect = document.getElementById('categorySelect');
+        const tagInput = document.getElementById('newTag');
+        const category = catSelect.value;
+        const tagName = tagInput.value.trim();
+        
+        if (!category || !tagName) {
+            alert('Please select a category and enter a tag name');
+            return;
+        }
+        
+        if (data.categories[category].includes(tagName)) {
+            alert('Tag already exists in this category!');
+            return;
+        }
+
+        data.categories[category].push(tagName);
+        await saveData();
+        updateTagCheckboxes();
+        tagInput.value = '';
+        alert(`Tag "${tagName}" added to ${category}!`);
+    }
+
+    // Update the dropdown used when creating tags
+    function updateCategorySelect() {
+        const select = document.getElementById('categorySelect');
+        select.innerHTML = '<option value="">Select Category...</option>';
+        Object.keys(data.categories).forEach(cat => {
+            select.innerHTML += `<option value="${cat}">${cat}</option>`;
+        });
+    }
+
+    // Update the checkbox list used when creating resources
+    function updateTagCheckboxes() {
+        const container = document.getElementById('tagCheckboxes');
+        container.innerHTML = '';
+        Object.keys(data.categories).forEach(cat => {
+            if (data.categories[cat].length > 0) {
+                let html = `<div class="tag-group"><strong>${cat}:</strong><br>`;
+                data.categories[cat].forEach(tag => {
+                    html += `<label style="margin-right: 10px;">
+                                <input type="checkbox" value="${tag}" class="res-tag-checkbox"> ${tag}
+                             </label>`;
+                });
+                html += `</div>`;
+                container.innerHTML += html;
+            }
+        });
+    }
+
+    // --- Resource Management ---
+    async function addResource() {
+        const title = document.getElementById('resTitle').value.trim();
+        const desc = document.getElementById('resDesc').value.trim();
+        const content = document.getElementById('resContent').value.trim();
+        
+        // Gather selected tags
+        const selectedTags = Array.from(document.querySelectorAll('.res-tag-checkbox:checked')).map(cb => cb.value);
+
+        if (!title) { alert("Title is required!"); return; }
+
+        data.resources.push({ title, desc, content, tags: selectedTags });
+        await saveData();
+
+        // Clear form
+        document.getElementById('resTitle').value = '';
+        document.getElementById('resDesc').value = '';
+        document.getElementById('resContent').value = '';
+        document.querySelectorAll('.res-tag-checkbox').forEach(cb => cb.checked = false);
+
+        alert("Resource saved successfully!");
+    }
+
+    // --- Search Interface ---
+    function updateSearchFilters() {
+        const container = document.getElementById('searchFilters');
+        container.innerHTML = '';
+        
+        Object.keys(data.categories).forEach(cat => {
+            if (data.categories[cat].length > 0) {
+                let select = `<div class="filter-item">
+                    <label style="font-size: 12px; font-weight: bold;">${cat}</label>
+                    <select class="search-filter" data-category="${cat}" onchange="performSearch()">
+                        <option value="">All ${cat}</option>`;
+                
+                data.categories[cat].forEach(tag => {
+                    select += `<option value="${tag}">${tag}</option>`;
+                });
+                select += `</select></div>`;
+                container.innerHTML += select;
+            }
+        });
+    }
+
+    function performSearch() {
+        const keyword = document.getElementById('searchInput').value.toLowerCase();
+        const filters = Array.from(document.querySelectorAll('.search-filter'))
+                             .map(select => select.value)
+                             .filter(val => val !== ""); // Get active filter tags
+
+        const resultsContainer = document.getElementById('searchResults');
+        resultsContainer.innerHTML = '';
+
+        const results = data.resources.filter(res => {
+            // 1. Text Search (Matches Title, Desc, or Content)
+            const textMatch = res.title.toLowerCase().includes(keyword) || 
+                              res.desc.toLowerCase().includes(keyword) || 
+                              res.content.toLowerCase().includes(keyword);
+
+            // 2. Tag Filters (Resource must have ALL selected filter tags)
+            const tagMatch = filters.every(filterTag => res.tags.includes(filterTag));
+
+            return textMatch && tagMatch;
+        });
+
+        if (results.length === 0) {
+            resultsContainer.innerHTML = '<p style="color: gray;">No resources found.</p>';
+            return;
+        }
+
+        results.forEach(res => {
+            const tagsHtml = res.tags.map(t => `<span class="tag-label">${t}</span>`).join('');
+            resultsContainer.innerHTML += `
+                <div class="card">
+                    <h3>${res.title}</h3>
+                    <p><strong>Description:</strong> ${res.desc}</p>
+                    <p>${res.content}</p>
+                    <div style="margin-top: 10px;">${tagsHtml}</div>
+                </div>
+            `;
+        });
+    }
+
+    // Run init on load
+    init();
+</script>
+</body>
+</html>
